@@ -1,0 +1,19 @@
+# Python 虚拟环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
+
+# 密钥与本地环境变量
+.env
+.env.*
+!.env.example
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 真实接口结果默认不提交；Mock 展示结果与模板可提交。
+results/real/
+
