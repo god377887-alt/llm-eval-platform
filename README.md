@@ -1,142 +1,138 @@
-# 多模型中文复杂任务评测平台 V1
+# 多模型中文复杂任务评测平台 V2
 
-一个面向中文复杂任务的轻量评测流水线。项目提供 24 条结构化测试题、双 Prompt 实验、OpenAI 兼容接口、基础规则校验、人工评分模板、Badcase 模板以及可复现的 Mock 报告。
+一个轻量、可追踪的中文 LLM 评测流水线。V2 保留 24 条测试题、双 Prompt、MockProvider、规则评测和图表报告，并新增显式真实 API 安全门槛、SQLite 运行存储与 SQL 统计报告。
 
-> **重要声明：仓库内报告基于 MockProvider 流程验证，不代表真实模型评测结论。**
+> **仓库内 Mock 结果仅用于验证工程流程，不代表真实模型能力、真实成本或 Prompt 优化结论。**
 
 ## 核心能力
 
-- 24 条中文复杂任务测试集，覆盖 6 类场景。
-- 同时运行 `baseline` 与 `optimized` 两个 Prompt 版本。
-- 保留本地 `MockProvider`，无 API Key 也能完整运行。
-- 支持 OpenAI Chat Completions 兼容接口。
-- `.env` 无 Key 时自动回退 Mock，不会误发真实请求。
-- 校验有效 JSON、必需字段、长度、行数、关键词、格式、不确定性与安全拒绝。
-- 导出 JSONL、CSV、人工评分模板、Badcase 分类模板、Markdown 报告与 PNG 图表。
-- 每条 Mock 记录包含 `provider_type=mock`、`is_mock=true` 和 Mock 模型名。
+- 24 条中文复杂任务，覆盖 6 类场景，每类 4 条。
+- `baseline` 与 `optimized` 双 Prompt，一次完整 Mock 运行生成 48 条结果。
+- 默认 Provider 固定为 `mock`；即使本地存在 Key，也不会自动调用真实接口。
+- 真实接口只能通过 `--provider api` 显式触发，支持超时、有限重试、错误与延迟记录。
+- 解析接口明确返回的 token usage；接口未返回时留空。
+- 成本字段已预留；没有明确价格配置时留空，不做估算。
+- JSON、字段、长度、格式、不确定性与风险拒绝等基础规则检查。
+- 同步导出 JSONL、CSV 和 SQLite，并通过真实 SQL 生成统计报告。
+
+## 数据流
+
+```text
+test_cases.jsonl + Prompt
+        ↓
+MockProvider（默认）或 API Provider（显式）
+        ↓
+rule_evaluator
+        ↓
+JSONL / CSV + SQLite
+        ↓
+Mock 图表报告 + SQL 汇总报告
+```
 
 ## 目录结构
 
 ```text
 llm-eval-platform/
-├─ data/
-│  └─ test_cases.jsonl
-├─ prompts/
-│  ├─ baseline.txt
-│  └─ optimized.txt
+├─ data/test_cases.jsonl
+├─ prompts/{baseline,optimized}.txt
 ├─ src/
 │  ├─ config.py
 │  ├─ providers.py
 │  ├─ rule_evaluator.py
+│  ├─ database.py
 │  ├─ export_results.py
+│  ├─ run_eval.py
 │  ├─ analyze_results.py
-│  └─ run_eval.py
+│  └─ generate_sql_report.py
+├─ tests/test_v2_pipeline.py
 ├─ results/
-│  ├─ mock/
-│  │  ├─ raw_results.jsonl
-│  │  └─ results.csv
-│  └─ templates/
-│     ├─ manual_scoring_template.csv
-│     └─ badcase_template.csv
-├─ reports/
-│  ├─ mock_summary.md
-│  ├─ mock_result_overview.png
-│  └─ mock_badcase_distribution.png
-├─ .env.example
-├─ requirements.txt
-└─ README.md
+│  ├─ mock/{raw_results.jsonl,results.csv}
+│  ├─ templates/
+│  ├─ eval_runs.db
+│  └─ sql_summary.csv
+└─ reports/
+   ├─ mock_summary.md
+   ├─ mock_result_overview.png
+   ├─ mock_badcase_distribution.png
+   └─ sql_summary.md
 ```
 
-## 测试集分类
+## 测试集与评测维度
 
 | 类别 | 数量 | 主要验证点 |
 |---|---:|---|
-| 复杂条件理解 | 4 | 多约束、组合、排序、预算计算 |
-| 长文本总结 | 4 | 数字保留、长度、行数、信息压缩 |
-| JSON 结构化输出 | 4 | JSON 有效性、字段完整性、无 Markdown |
-| 事实不确定性 | 4 | 信息不足、未来事实、来源核验、人物消歧 |
-| 多轮对话约束 | 4 | 跨轮记忆、最新指令、长度与禁用词 |
-| 风险边界 | 4 | 网络安全、医疗风险、歧视性决策、安全替代 |
+| 复杂条件理解 | 4 | 多约束、组合、排序、预算 |
+| 长文本总结 | 4 | 信息压缩、数字、长度与行数 |
+| JSON 结构化输出 | 4 | JSON 有效性与字段完整性 |
+| 事实不确定性 | 4 | 信息不足与来源核验 |
+| 多轮对话约束 | 4 | 跨轮约束与最新指令 |
+| 风险边界 | 4 | 安全拒绝与替代建议 |
 
-每条测试题包含：`case_id`、`category`、`title`、`input`、`expected_constraints`、`expected_format`、`risk_level`。
+每条结果记录运行批次、Provider、模型名、Prompt、输入输出、状态、错误、延迟、规则得分、规则明细、usage、成本占位和时间戳。基础规则只用于预筛，不能替代人工语义与事实评审。
 
-## 评测维度
+## SQLite 表
 
-- 执行状态与错误信息。
-- 响应延迟（毫秒）。
-- JSON 是否可解析、必需字段是否齐全。
-- 最大长度、最小长度、最大行数。
-- 必需关键词、禁用关键词、中文与无标点要求。
-- 信息不足时的不确定性表达。
-- 高风险请求的基础拒绝检测。
-- 人工评分与 Badcase 分类（模板留空，不伪造人工结论）。
+- `runs`：每个 Prompt 版本的一次运行批次，记录 `run_id`、起止时间、Provider、模型、Prompt、Mock 标记、结果数和状态。
+- `eval_results`：逐条结果、规则得分、失败规则 JSON、完整规则检查 JSON、延迟、错误、usage 与成本占位。
 
-基础规则只能用于预筛，不能替代人工质量评审。
+规则明细以 JSON 字段保存，可追溯某条结果为何通过或失败；常用维度已建立索引。
 
-## 运行方式
+## 安全运行 Mock 模式
 
 Windows PowerShell：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python .\src\run_eval.py --provider auto --prompt-version all
+.\.venv\Scripts\python.exe .\src\run_eval.py --provider mock --prompt-version all
+.\.venv\Scripts\python.exe .\src\generate_sql_report.py
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-未创建 `.env` 或未填写 `OPENAI_API_KEY` 时，上述命令自动运行 MockProvider，并生成 24×2 条流程记录。
+`--limit N` 限制测试题数量；双 Prompt 时，每个 Prompt 各运行 N 条。
 
-只运行一个 Prompt：
+## 将来安全配置真实 API
+
+1. 复制 `.env.example` 为 `.env`。
+2. 仅在本机手动填写 `API_BASE_URL`、`API_KEY`、`MODEL_NAME`、`REQUEST_TIMEOUT_SECONDS`、`MAX_RETRIES`。
+3. 确认 `.env` 未被 Git 跟踪。
+4. 首次只运行少量题：
 
 ```powershell
-python .\src\run_eval.py --provider mock --prompt-version baseline
-python .\src\run_eval.py --provider mock --prompt-version optimized
+.\.venv\Scripts\python.exe .\src\run_eval.py --provider api --prompt-version baseline --limit 2
 ```
 
-配置真实兼容接口（项目不会自动替你填写或上传密钥）：
+缺少 `API_KEY` 时，API 模式会明确报错并停止，不会静默回退。真实输出进入已被 Git 忽略的 `results/real/`；数据库仍以 `is_mock=0` 与 Mock 数据分开统计。
 
-```powershell
-Copy-Item .env.example .env
-# 手动编辑 .env，填写 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL
-python .\src\run_eval.py --provider openai --prompt-version all
-```
+## 输出文件
 
-## 输出文件说明
+- `results/mock/raw_results.jsonl`：包含规则嵌套明细的 Mock 原始结果。
+- `results/mock/results.csv`：可筛选的 Mock 平面结果。
+- `results/eval_runs.db`：运行与逐条结果的 SQLite 数据库。
+- `results/sql_summary.csv`：多组 SQL 查询的统一 CSV 输出。
+- `reports/sql_summary.md`：数量、平均延迟、规则通过率、失败案例和最慢案例。
+- `results/templates/`：人工评分与 Badcase 空白模板。
+- `reports/mock_*.png`、`reports/mock_summary.md`：Mock 流程展示产物。
 
-- `results/mock/raw_results.jsonl`：包含嵌套规则检查明细的完整 Mock 结果。
-- `results/mock/results.csv`：适合筛选和快速查看的平面结果。
-- `results/templates/manual_scoring_template.csv`：人工准确性、约束、格式和安全评分模板。
-- `results/templates/badcase_template.csv`：规则候选、人工分类、严重度、根因和行动项模板。
-- `reports/mock_summary.md`：Mock 流程覆盖摘要与结论边界。
-- `reports/mock_result_overview.png`：按测试类别和 Prompt 展示运行覆盖。
-- `reports/mock_badcase_distribution.png`：基础规则分类分布，需人工复核。
+## Mock 与真实 API 的区别
 
-![Mock 流程覆盖](reports/mock_result_overview.png)
-
-![Mock 规则分类](reports/mock_badcase_distribution.png)
-
-## MockProvider 与真实 API Provider
-
-| 项目 | MockProvider | OpenAI 兼容 Provider |
+| 项目 | MockProvider | API Provider |
 |---|---|---|
-| 是否联网 | 否 | 是 |
-| 是否需要 API Key | 否 | 是 |
-| 输出来源 | 本地固定模拟回答 | 配置的真实模型接口 |
-| 默认结果目录 | `results/mock/` | `results/real/` |
-| 可否代表模型能力 | 不可以 | 需完成真实运行与人工评审后判断 |
+| 是否联网 | 否 | 是，仅显式触发 |
+| 是否需要 Key | 否 | 是 |
+| 输出来源 | 本地固定模拟回答 | 配置的兼容接口 |
+| usage / 成本 | 留空 | usage 按接口返回；成本无价格时留空 |
+| 能否评价模型 | 不能 | 仍需真实运行与人工复核 |
 
 ## 当前局限
 
-- 当前仓库不包含任何真实模型实验结论。
-- 规则评测是启发式检查，不能判断语义正确性与事实真实性。
-- OpenAI 兼容实现基于 Chat Completions 结构，不覆盖所有厂商扩展字段。
-- MockProvider 对两个 Prompt 返回同一组固定回答，不能用于证明 Prompt 优化效果。
-- 尚未实现并发、重试、限流、成本统计和实验数据库。
+- 尚未运行真实模型，因此不得根据 Mock 结果评价模型或 Prompt。
+- Mock 对两个 Prompt 返回同一组固定答案，不能证明 optimized 优于 baseline。
+- 规则评测不能判断深层语义正确性、事实真实性或回答风格质量。
+- 当前 API 实现面向 Chat Completions 兼容结构，未实现并发、限流或厂商特有字段。
+- 成本只预留字段；在没有明确、可审计价格配置时不会估算。
 
 ## 后续计划
 
-- 配置真实 API 后运行受控模型对比并进行人工评分。
-- 增加可配置重试、并发、Token 与成本统计。
-- 扩展语义评测器与更严格的 JSON Schema 校验。
-- 引入可追踪的实验批次、版本元数据和 CI 测试。
-
+- 经人工确认后使用 `--limit` 做小规模真实 API 试跑。
+- 增加可审计的模型价格配置与成本计算。
+- 扩展人工评分流程、JSON Schema 和跨模型对比。
+- 在不混淆 Mock/真实数据的前提下增加可视化仪表盘。

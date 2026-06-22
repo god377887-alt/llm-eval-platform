@@ -17,3 +17,6 @@ Thumbs.db
 # 真实接口结果默认不提交；Mock 展示结果与模板可提交。
 results/real/
 
+# SQLite 临时事务文件不应提交；主数据库用于 V2 演示。
+*.db-wal
+*.db-shm
